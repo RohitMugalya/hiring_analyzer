@@ -245,13 +245,13 @@ def load_onet_dataset(path) -> pd.DataFrame:
     """Load O*NET Skills.csv — tab-separated with columns:
        O*NET-SOC Code, Title, Element ID, Element Name, Scale ID, Scale Name, Data Value, ...
     """
-    # Try tab-separated first (O*NET default), fall back to comma
+    # Try comma-separated first, fall back to tab
     try:
-        df = pd.read_csv(path, sep="\t", low_memory=False)
-        if len(df.columns) < 3:
-            df = pd.read_csv(path, low_memory=False)
-    except Exception:
         df = pd.read_csv(path, low_memory=False)
+        if len(df.columns) < 3:
+            df = pd.read_csv(path, sep="\t", low_memory=False)
+    except Exception:
+        df = pd.read_csv(path, sep="\t", low_memory=False)
 
     col_lower = {c.lower().strip(): c for c in df.columns}
     rename_map = {}
