@@ -103,79 +103,179 @@ def generate_synthetic_onet():
 
 # ── Real dataset loaders ────────────────────────────────────────────────────
 
-def load_jobs_dataset(path: str) -> pd.DataFrame:
-    """Load LinkedIn job postings CSV."""
-    df = pd.read_csv(path)
-    # Normalize common column name variants
+def extract_skills_from_text(text: str) -> str:
+    """Extract skill keywords from free-text job descriptions or resumes."""
+    SKILL_KEYWORDS = [
+        "python", "sql", "java", "javascript", "react", "node", "aws", "azure", "gcp",
+        "docker", "kubernetes", "machine learning", "deep learning", "nlp", "tensorflow",
+        "pytorch", "spark", "hadoop", "scala", "r", "tableau", "power bi", "excel",
+        "git", "agile", "scrum", "project management", "data analysis", "communication",
+        "leadership", "marketing", "sales", "finance", "accounting", "recruiting",
+        "photoshop", "illustrator", "indesign", "html", "css", "c++", "c#", "go",
+        "typescript", "mongodb", "postgresql", "mysql", "redis", "kafka", "airflow",
+        "data visualization", "statistics", "research", "writing", "design", "testing",
+        "devops", "linux", "networking", "security", "compliance", "training",
+        "customer service", "operations", "strategy", "consulting", "problem solving",
+        "sharepoint", "microsoft office", "adobe", "figma", "sketch", "jira", "confluence"
+    ]
+    if not isinstance(text, str):
+        return ""
+    text_lower = text.lower()
+    found = [skill.title() for skill in SKILL_KEYWORDS if skill in text_lower]
+    return ", ".join(found) if found else "General Skills"
+
+
+def load_jobs_dataset(path) -> pd.DataFrame:
+    """Load LinkedIn job postings CSV — actual columns:
+       job_id, company_name, title, description, skills_desc, listed_time, location, etc.
+    """
+    df = pd.read_csv(path, low_memory=False)
+
+    # Map actual column names to standard names
     rename_map = {}
-    col_lower = {c.lower(): c for c in df.columns}
+    col_lower = {c.lower().strip(): c for c in df.columns}
+
     for standard, variants in {
-        "title": ["job_title", "jobtitle", "position", "title"],
-        "company": ["company_name", "employer", "organization"],
-        "industry": ["industry_name", "sector", "field"],
-        "skills_required": ["skills", "required_skills", "skill_abr", "normalized_skills"],
-        "location": ["job_location", "city", "state"],
-        "year": ["posting_year", "date_posted", "listed_time"],
+        "title":    ["title", "job_title", "jobtitle", "position"],
+        "company":  ["company_name", "company", "employer"],
+        "location": ["location", "job_location", "city"],
+        "year":     ["listed_time", "original_listed_time", "posting_date", "date_posted"],
+        "skills_raw": ["skills_desc", "skills", "required_skills", "description"],
     }.items():
         for v in variants:
-            if v in col_lower and standard not in df.columns:
+            if v in col_lower and standard not in rename_map.values():
                 rename_map[col_lower[v]] = standard
+                break
+
     df.rename(columns=rename_map, inplace=True)
 
-    if "year" not in df.columns:
-        df["year"] = 2023
+    # Parse year from epoch milliseconds (LinkedIn uses ms timestamps)
+    if "year" in df.columns:
+        col = pd.to_numeric(df["year"], errors="coerce")
+        # LinkedIn timestamps are in milliseconds
+        if col.dropna().median() > 1e10:
+            df["year"] = pd.to_datetime(col, unit="ms", errors="coerce").dt.year
+        else:
+            df["year"] = pd.to_datetime(col, unit="s", errors="coerce").dt.year
+        df["year"] = df["year"].fillna(2023).astype(int)
     else:
-        df["year"] = pd.to_datetime(df["year"], errors="coerce").dt.year.fillna(2023).astype(int)
+        df["year"] = 2023
 
-    for col in ["title", "company", "industry", "skills_required", "location"]:
+    # Extract skills from skills_desc free text
+    if "skills_raw" in df.columns:
+        df["skills_required"] = df["skills_raw"].apply(extract_skills_from_text)
+    else:
+        df["skills_required"] = "General Skills"
+
+    # Industry — not in this dataset, derive from title
+    if "industry" not in df.columns:
+        df["industry"] = df.get("title", pd.Series(["Unknown"] * len(df))).apply(infer_industry_from_title)
+
+    for col in ["title", "company", "location"]:
         if col not in df.columns:
             df[col] = "Unknown"
 
     return df[["title", "company", "industry", "skills_required", "location", "year"]].dropna(subset=["title"])
 
 
-def load_resume_dataset(path: str) -> pd.DataFrame:
-    """Load resume dataset CSV."""
+def infer_industry_from_title(title: str) -> str:
+    """Infer industry from job title keywords."""
+    if not isinstance(title, str):
+        return "Other"
+    t = title.lower()
+    if any(k in t for k in ["software", "engineer", "developer", "data", "ml", "ai", "cloud", "devops"]):
+        return "Technology"
+    if any(k in t for k in ["nurse", "doctor", "medical", "health", "clinical", "therapist", "physician"]):
+        return "Healthcare"
+    if any(k in t for k in ["finance", "accountant", "analyst", "banker", "investment", "audit"]):
+        return "Finance"
+    if any(k in t for k in ["teacher", "professor", "education", "tutor", "academic", "instructor"]):
+        return "Education"
+    if any(k in t for k in ["marketing", "brand", "social media", "seo", "content", "advertising"]):
+        return "Marketing"
+    if any(k in t for k in ["hr", "human resource", "recruiter", "talent", "people ops"]):
+        return "Human Resources"
+    if any(k in t for k in ["sales", "account executive", "business development"]):
+        return "Sales"
+    if any(k in t for k in ["legal", "attorney", "lawyer", "counsel", "paralegal"]):
+        return "Legal"
+    if any(k in t for k in ["operations", "supply chain", "logistics", "manufacturing"]):
+        return "Operations"
+    return "Other"
+
+
+def load_resume_dataset(path) -> pd.DataFrame:
+    """Load Resume.csv — actual columns: ID, Resume_str, Resume_html, Category"""
     df = pd.read_csv(path)
-    col_lower = {c.lower(): c for c in df.columns}
+
+    # Category → applied_role, Resume_str → extract skills
     rename_map = {}
-    for standard, variants in {
-        "applied_role": ["category", "job_category", "role", "position"],
-        "skills": ["resume", "resume_str", "skills", "text"],
-    }.items():
-        for v in variants:
-            if v in col_lower and standard not in df.columns:
-                rename_map[col_lower[v]] = standard
+    col_lower = {c.lower().strip(): c for c in df.columns}
+
+    if "category" in col_lower:
+        rename_map[col_lower["category"]] = "applied_role"
+    if "resume_str" in col_lower:
+        rename_map[col_lower["resume_str"]] = "resume_text"
+    elif "resume" in col_lower:
+        rename_map[col_lower["resume"]] = "resume_text"
+
     df.rename(columns=rename_map, inplace=True)
 
-    for col in ["applied_role", "skills"]:
-        if col not in df.columns:
-            df[col] = "Unknown"
+    if "applied_role" not in df.columns:
+        df["applied_role"] = "Unknown"
+
+    # Extract skills from resume text
+    if "resume_text" in df.columns:
+        df["skills"] = df["resume_text"].apply(extract_skills_from_text)
+    else:
+        df["skills"] = "General Skills"
 
     df["candidate_id"] = [f"CAND_{i+1:04d}" for i in range(len(df))]
+    df["industry"] = df["applied_role"].apply(infer_industry_from_title)
+
+    # Simulate hired flag and year since dataset doesn't have them
+    np.random.seed(42)
     df["hired"] = np.random.randint(0, 2, len(df))
-    df["industry"] = df.get("industry", "Unknown")
     df["year"] = np.random.randint(2018, 2025, len(df))
+
     return df[["candidate_id", "applied_role", "skills", "industry", "hired", "year"]]
 
 
-def load_onet_dataset(path: str) -> pd.DataFrame:
-    """Load O*NET Skills or Occupation Data CSV."""
-    df = pd.read_csv(path)
-    col_lower = {c.lower(): c for c in df.columns}
+def load_onet_dataset(path) -> pd.DataFrame:
+    """Load O*NET Skills.csv — tab-separated with columns:
+       O*NET-SOC Code, Title, Element ID, Element Name, Scale ID, Scale Name, Data Value, ...
+    """
+    # Try tab-separated first (O*NET default), fall back to comma
+    try:
+        df = pd.read_csv(path, sep="\t", low_memory=False)
+        if len(df.columns) < 3:
+            df = pd.read_csv(path, low_memory=False)
+    except Exception:
+        df = pd.read_csv(path, low_memory=False)
+
+    col_lower = {c.lower().strip(): c for c in df.columns}
     rename_map = {}
+
     for standard, variants in {
-        "occupation": ["title", "occupation_title", "o*net-soc title", "o*net title"],
-        "skill": ["element name", "skill_name", "skill", "element_name"],
-        "importance": ["data value", "importance_score", "value", "data_value"],
+        "occupation": ["title", "o*net-soc title", "occupation_title", "occupation"],
+        "skill":      ["element name", "element_name", "skill_name", "skill"],
+        "importance": ["data value", "data_value", "importance", "value"],
+        "scale":      ["scale id", "scale_id"],
     }.items():
         for v in variants:
-            if v in col_lower and standard not in df.columns:
+            if v in col_lower and standard not in rename_map.values():
                 rename_map[col_lower[v]] = standard
+                break
+
     df.rename(columns=rename_map, inplace=True)
+
+    # O*NET has both Importance (IM) and Level (LV) rows — keep only Importance
+    if "scale" in df.columns:
+        df = df[df["scale"] == "IM"]
 
     for col in ["occupation", "skill", "importance"]:
         if col not in df.columns:
             df[col] = "Unknown"
 
+    df["importance"] = pd.to_numeric(df["importance"], errors="coerce").fillna(0)
     return df[["occupation", "skill", "importance"]].dropna()
