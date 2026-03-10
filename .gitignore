@@ -1,4 +1,5 @@
 *.Identifier
 __pycache__/
+datasets/
 *.pyc
 .env
