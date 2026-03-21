@@ -1,5 +1,6 @@
 *.Identifier
 __pycache__/
+clean_datasets/
 datasets/
 *.pyc
 .env
