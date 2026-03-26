@@ -16,9 +16,15 @@ st.markdown("Enter your profile below to get personalized hiring insights, caree
 
 # ── Load session data ─────────────────────────────────────────────────────────
 def get_data():
-    candidates_df = st.session_state.get("candidates_df") or generate_synthetic_candidates(400)
-    jobs_df       = st.session_state.get("jobs_df")       or generate_synthetic_jobs(500)
-    onet_df       = st.session_state.get("onet_df")       or generate_synthetic_onet()
+    candidates_df = st.session_state.get("candidates_df")
+    if candidates_df is None or candidates_df.empty:
+        candidates_df = generate_synthetic_candidates(400)
+    jobs_df = st.session_state.get("jobs_df")
+    if jobs_df is None or jobs_df.empty:
+        jobs_df = generate_synthetic_jobs(500)
+    onet_df = st.session_state.get("onet_df")
+    if onet_df is None or onet_df.empty:
+        onet_df = generate_synthetic_onet()
     skill_demand  = st.session_state.get("skill_demand_df")
 
     if skill_demand is None:
